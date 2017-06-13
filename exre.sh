@@ -68,8 +68,11 @@ function rename()
         {
             date="nodate"
         }
-        seconds=mktime(date)
-        date=strftime("%Y%m%d.%H%M%S", seconds)
+        else
+        {
+            seconds=mktime(date)
+            date=strftime("%Y%m%d.%H%M%S", seconds)
+        }
         
         model=""
         if($2 != "-")
@@ -133,7 +136,7 @@ function rename()
         
         #print "+++"oldpath, newpath
         
-        if ("'$dryrun'" == "false")
+        if ("'$dryrun'" != "true" && date != "nodate")
         {
             # 修改mtime
             touch_date=strftime("%Y%m%d%H%M.%S", seconds)
@@ -155,7 +158,14 @@ function rename()
             }
             else
             {
-                cmd="mv -i \"" oldpath "\" \"" newpath"\""
+                if (date == "nodate")
+                {
+                    cmd="mv -i \"" oldpath "\" \"" dest_dir"\""
+                }
+                else
+                {
+                    cmd="mv -i \"" oldpath "\" \"" newpath"\""
+                }
                 cmd | getline res
                 close(cmd)
                 print cmd
@@ -164,7 +174,7 @@ function rename()
         else
         {
             # 注意输出单引号是这个形式：'\''
-            print "[ERROR] The target file '\''"newpath"'\'' already existed, skipped" > "/dev/stderr"
+            print "[ERROR] The target file '\''"newpath"'\'' already existed while processing the file '\''"oldpath"'\'', skipped" > "/dev/stderr"
         }
     }' 2>>$logfile
     
@@ -198,9 +208,9 @@ while getopts "i:o:d" opt
 do
     case $opt in
         i)
-            input_dir=$OPTARG;;
+            input_dir="$OPTARG";;
         o)
-            output_dir=$OPTARG;;
+            output_dir="$OPTARG";;
         d)
             dryrun=true;;
     esac
@@ -210,7 +220,7 @@ if [ -f "$input_dir" -o -d "$input_dir" ]; then #文件或目录均可，如果�
     rename;
     exit 0
 else
-    printusage;
+    echo "'$input_dir' is neither a directory nor a file, exited"
     exit 3
 fi
 

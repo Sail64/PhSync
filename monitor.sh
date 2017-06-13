@@ -14,18 +14,16 @@
 # 不管是正常中断还是异常中断，中断后，都要使用monitor.sh -r清空队列，再重新执行monitor.sh生成队列。
 # 因为中断后，convertor.sh会把$monitor_dir信息丢失，无法再使用队列中的信息。
 
-monitor_dir=$1
-
 # 包含正在被处理的文件的队列
 RDS_QUE=the_queue_which_files_are_processing
 
 # 包含正在上传中的文件的一个Set
 RDS_UPL_FILES=the_files_which_are_being_uploaded
-file_types=jpg,jpeg,mov,mp4,avi,JPG,JPEG,MOV,MP4,AVI
+file_types=jpg,jpeg,mov,mp4,avi,3gp,JPG,JPEG,MOV,MP4,AVI,3GP
 
 function is_photo_file()
 {
-    f=$1
+    f="$1"
     for ext in ${types_arr[@]}
     do
         if [ "${f##*.}" = "$ext" ]; then
@@ -42,26 +40,40 @@ function process_existed_files()
     #redis-cli rpush $RDS_QUE "$monitor_dir" >/dev/null
     #echo "Found directory: %s" $monitor_dir
 
+    # 将分隔符置空，否则find出来的目录如果带空格会被当成分隔符产生换行
+    OLD_IFS="$IFS"
+    IFS=
+
     #1. 先找目录，让接收者先建立目录
-    for dir in $(find $monitor_dir -type d); do
-        #dir=${dir#$monitor_dir/}
-        printf "Found directory: %s" $dir
-        redis-cli rpush $RDS_QUE "$dir" >/dev/null
-        echo ", added to queue"
-    done
+    # 读取find结果的标准写法
+    # http://mywiki.wooledge.org/BashFAQ/001
+    find $monitor_dir -type d | 
+    (
+        # -r用来去掉字符串中的反斜杠转义
+        while read -r dir; do
+            printf "Found directory: %s, added to queue\n" $dir
+            redis-cli rpush $RDS_QUE "$dir" >/dev/null
+        done
+    )
     
     #2. 再找文件
-    for file in $(find $monitor_dir -type f); do
-        printf "Found %s" $file
-        
-        is_photo_file $file;
-        if [ $? = 1 ]; then
-            redis-cli rpush $RDS_QUE "$file" >/dev/null
-            printf ", added to queue"
-        fi
-        
-        echo ""  #换行
-    done
+    find $monitor_dir -type f |
+    (
+        # -r用来去掉字符串中的反斜杠转义
+        while read -r file; do
+            printf "Found file: %s" "$file"
+            
+#            is_photo_file "$file";
+#            if [ $? = 1 ]; then
+                redis-cli rpush $RDS_QUE "$file" >/dev/null
+                echo ", added to queue"
+#            else
+#                echo ", ignored"
+#            fi
+        done
+    )
+    
+    IFS="$OLD_IFS"
 }
 
 function start_monitor()
@@ -80,8 +92,8 @@ function start_monitor()
             # 之所以采用Set，是因为可能存在多个终端同时上传文件的情况
             file_uploading=$(echo $line | grep "CREATE" | cut -d'|' -f 3)
             #echo "file_uploading="$file_uploading
-            if [ ! -z $file_uploading ]; then
-                redis-cli sadd $RDS_UPL_FILES $file_uploading >/dev/null
+            if [ ! -z "$file_uploading" ]; then
+                redis-cli sadd $RDS_UPL_FILES "$file_uploading" >/dev/null
                 #echo redis-cli sadd $RDS_UPL_FILES $file_uploading
                 continue
             fi
@@ -91,7 +103,7 @@ function start_monitor()
             # 所以需要去Set中查找是否之前上传过的，来判断是否一个新增文件
             file_upload_finished=$(echo $line | grep "CLOSE_WRITE" | cut -d'|' -f 3)
             #echo "file_upload_finished="$file_upload_finished
-            if [ ! -z $file_upload_finished ]; then
+            if [ ! -z "$file_upload_finished" ]; then
                 result=$(redis-cli sismember $RDS_UPL_FILES "$file_upload_finished")
                 # 未找到，跳过
                 if [ "$result" != "1" ]; then
@@ -104,9 +116,9 @@ function start_monitor()
             redis-cli srem $RDS_UPL_FILES "$file_upload_finished" >/dev/null
             
             newfile=$file_upload_finished
-            printf "Found %s" $newfile
+            printf "Found %s" "$newfile"
             
-            is_photo_file $newfile;
+            is_photo_file "$newfile";
             if [ $? = 1 ]; then
                 redis-cli rpush $RDS_QUE "$newfile" >/dev/null
                 printf ", added to queue"
@@ -118,7 +130,7 @@ function start_monitor()
 }
 
 ###
-while getopts "rl" opt
+while getopts "rlad:" opt
 do
     case $opt in
         r)
@@ -127,11 +139,16 @@ do
         l)
             redis-cli llen $RDS_QUE  #list
             exit 0;;
+        a)
+            archive="true";;
+        d)
+            monitor_dir=$OPTARG;;
     esac
 done
 
+echo "$monitor_dir"
 if [ ! -d "$monitor_dir" ]; then
-    echo "Usage:" `basename $0` [-r] [-l] "<directory>"
+    echo "Usage:" `basename $0` "[-r/-l] [-a] <-d directory>"
     exit 1
 fi
 
@@ -143,8 +160,10 @@ IFS=","
 types_arr=($file_types)
 IFS="$OLD_IFS"
 
-# 先把目录中遗留的文件扔到队列中
-process_existed_files;
-
-# 启动监控
-start_monitor;
+if [ "$archive" = "true" ]; then
+    # 先把目录中遗留的文件扔到队列中
+    process_existed_files;
+else
+    # 启动监控
+    start_monitor;
+fi

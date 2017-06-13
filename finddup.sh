@@ -139,7 +139,7 @@ function reload()
             close(cmd)
             
             now=strftime("%Y-%m-%d %H:%M:%S")
-            errinfo="["now"] Found duplicate file: key="filename"\n    New: "filepath"\n    Old: "res"\n    Skipped."
+            errinfo="["now"] Found duplicate file: "filename"\n  new="filepath"\n  old="res"\n"
             print errinfo
             print errinfo > "/dev/stderr"
         }

@@ -23,7 +23,7 @@
 RDS_QUE=the_queue_which_files_are_processing
 output_dir=$1
 tmpfs_path=/dev/shm  #保存临时文件
-video_file_types=mov,mp4,avi,MOV,MP4,AVI
+video_file_types=mov,mp4,avi,3gp,MOV,MP4,AVI,3GP
 mp4_file_types=mp4,MP4
 log_file=convertor.log
 
@@ -59,16 +59,17 @@ function is_mp4_file()
 
 function process_video_files()
 {
-    file=$1
-    tmpfile=$tmpfs_path/ffmpeg_is_processing_$(basename $file)
+    file="$1"
+    dest_dir="$2"
+    tmpfile=$tmpfs_path/$(basename "${file%.*}").mp4
     
     # 获取metadata
-    res=$(exiftool -d "%Y-%m-%d %H:%M:%S" -createdate -T $file)
+    res=$(exiftool -d "%Y-%m-%d %H:%M:%S" -createdate -T "$file")
     createdate=$(echo $res | awk -F'\t' '{print $1}')
     #model=$(echo $res | awk -F'\t' '{print $2}')  #经实测，mp4和mov都无法设置model
     
     #格式化
-    is_mp4_file $file;
+    is_mp4_file "$file";
     if [ $? -eq 1 ]; then  #如果是mp4文件
         createdate=$(date "+%Y%m%d.%H%M%S" -d "$createdate 8 hour")  #修正mp4中的时间
     else
@@ -76,10 +77,10 @@ function process_video_files()
     fi
     
     #转码
-    ffmpeg -i $file -threads 4 -c:v libx265 -crf 22 -c:a libmp3lame -b:a 128k $tmpfile -y
+    ffmpeg -i "$file" -threads 4 -c:v libx265 -crf 22 -c:a libmp3lame -b:a 128k "$tmpfile" -y
     if [ $? -ne 0 ]; then
-        rm $tmpfile
-        mv -i $file $dest_dir
+        rm "$tmpfile"
+        mv -i "$file" "$dest_dir"
         if [ $? -eq 0 ]; then
             echo "An error occurred while ffmpeg processing '$file', it has been moved to '$dest_dir' directly" >> $log_file
         fi
@@ -87,8 +88,8 @@ function process_video_files()
     fi
     
     # 检查压缩率是否合格
-    orig_size=$(ls -l $file | cut -d" " -f5)
-    new_size=$(ls -l $tmpfile | cut -d" " -f5)
+    orig_size=$(ls -l "$file" | cut -d" " -f5)
+    new_size=$(ls -l "$tmpfile" | cut -d" " -f5)
     accepted_size=$(echo "$orig_size * $compress_ratio" | bc)
 
     #当new_size<accepted_size才算合格
@@ -96,16 +97,16 @@ function process_video_files()
     #echo "orig_size="$orig_size",accepted_size="$accepted_size",new_size="$new_size",is_accept="$is_accept >> $log_file
     if [ $is_accept = "true" ]; then  # 压缩后，大小符合要求
         #设置createdate到exif中。经实测，mp4和mov都无法设置model
-        exiftool "-createdate=$createdate" -overwrite_original $tmpfile
-        exre.sh -i $tmpfile -o $dest_dir #重命名后移到$dest_dir
+        exiftool "-createdate=$createdate" -overwrite_original "$tmpfile"
+        exre.sh -i "$tmpfile" -o "$dest_dir" #重命名后移到$dest_dir
         if [ $? -eq 0 ]; then
-            rm $file
+            rm "$file"
         fi
     else   # 压缩后，大小不符合要求
-        rm $tmpfile
+        rm "$tmpfile"
         #设置createdate到exif中。经实测，mp4和mov都无法设置model
-        exiftool "-createdate=$createdate" -overwrite_original $file
-        exre.sh -i $file -o $dest_dir  #重命名后移到$dest_dir
+        exiftool "-createdate=$createdate" -overwrite_original "$file"
+        exre.sh -i "$file" -o "$dest_dir"  #重命名后移到$dest_dir
         if [ $? -eq 0 ]; then
             echo "The file '$file' has been moved to '$dest_dir' directly with new exif createdate, because ffmpeg compressed not too much size" >> $log_file
         fi
@@ -149,21 +150,26 @@ function start()
             # line=/home/op/input_dir/a/b/c/1.jpg 或 line=/home/op/input_dir/a/b/c
             # monitor_dir=/home/op/input_dir/
             # dest=output_dir/a/b/c/1.jpg 或 dest=output_dir/a/b/c
-            dest=$output_dir/${line#$monitor_dir}   #拼装
+            file_from_queue=${line#$monitor_dir}
+            dest=$output_dir/"$file_from_queue"   #拼装
             
-            if [ -d $line ]; then  #目录
-                echo "mkdir -p $dest"
-                mkdir -p $dest
+            if [ -d "$line" ]; then  #目录
+                if [ x"$file_from_queue" = x"$line" ]; then  #截取失败
+                    echo "[INFO] Wrong directory: $dest"
+                else
+                    echo "mkdir -p $dest"
+                    mkdir -p "$dest"
+                fi
             else   #文件
                 dest_dir=${dest%/*}   #截取末尾的文件名，使他变成目录名
-                if [ -d $dest_dir ]; then
-                    is_video_file $line;
+                if [ -d "$dest_dir" ]; then
+                    is_video_file "$line";
                     if [ $? -eq 1 ]; then  #如果是视频文件
                         #echo "process video file: $line to $dest_dir"
-                        process_video_files $line $dest_dir;
+                        process_video_files "$line" "$dest_dir";
                     else
                         #echo "move $line to $dest_dir"
-                        exre.sh -i $line -o $dest_dir  #重命名后移到dest_dir
+                        exre.sh -i "$line" -o "$dest_dir"  #重命名后移到dest_dir
                     fi
                 else
                     echo "[ERROR] For file '$line', \$dest_dir='$dest_dir' is not a directory"
